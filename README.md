@@ -62,12 +62,18 @@ runtime cloning API in the supertonic Python SDK.
 
 ## Models
 
-| Model | Size | Notes |
-| --- | --- | --- |
-| `Supertone/supertonic-3` (default) | ~400 MB | 99M params, 44.1 kHz output, 31 languages. Auto-downloaded on first use. |
+The addon picks one of the three model checkpoints upstream ships. Change
+via the **Model** dropdown in the addon's Configure dialog — the addon
+reloads the new model on the next synthesis call.
 
-Cache lives under `~/.cache/supertonic3/` by default — override with
-`SUPERTONIC_CACHE_DIR=...`.
+| Model | Size | Languages | Notes |
+| --- | --- | --- | --- |
+| `supertonic-3` (default) | ~400 MB | 31 + `na` | 99M params, 44.1 kHz output. Auto-downloaded on first use. The original release covered in `manifest.json`'s `languages` field. |
+| `supertonic-2` | ~250 MB | 5 (en, ko, es, pt, fr) | Smaller multilingual; pick this if you only need the five and want a faster download. |
+| `supertonic` | ~200 MB | English only | The smallest of the three. No `na` fallback — non-English text is rendered with English phonology. |
+
+Each model caches under `~/.cache/supertonic<n>/` (n=1/2/3). Override the
+parent cache root with `SUPERTONIC_CACHE_DIR=...`.
 
 ## Building
 
@@ -76,7 +82,7 @@ pip install pyinstaller
 pip install supertonic
 pyinstaller supertonic-addon.spec --distpath dist/
 cd dist/supertonic-addon
-zip -r ../supertonic-0.0.1-linux-x86_64.zip . ../../manifest.json ../../LICENSE ../../README.md
+zip -r ../supertonic-0.0.2-linux-x86_64.zip . ../../manifest.json ../../LICENSE ../../README.md
 ```
 
 ## Output contract

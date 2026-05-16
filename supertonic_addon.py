@@ -53,7 +53,14 @@ logging.basicConfig(stream=sys.stderr, level=logging.INFO,
 
 PROTOCOL = 1
 ADDON_ID = 'supertonic'
-VERSION = '0.0.1'
+VERSION = '0.0.2'
+
+# Models the upstream supertonic-py SDK ships. Keep in sync with
+# `supertonic.config.AVAILABLE_MODELS` (1.2.x: `supertonic`,
+# `supertonic-2`, `supertonic-3`). The manifest's `config_schema` exposes
+# the same set in the same order so users get one consistent picker.
+_AVAILABLE_MODELS = ('supertonic-3', 'supertonic-2', 'supertonic')
+_DEFAULT_MODEL = 'supertonic-3'
 
 # Voice-id → preset name accepted by `TTS.get_voice_style(voice_name=...)`.
 # The id `supertonic-custom` is special-cased at request time to load the
@@ -115,7 +122,7 @@ def emit_result(rid, data):
 # changes (rare; user has to reopen the addon config dialog to flip it).
 # ---------------------------------------------------------------------------
 _model_lock = threading.Lock()
-_model_cache: dict = {'instance': None, 'device': None}
+_model_cache: dict = {'instance': None, 'device': None, 'model': None}
 
 # Cached resolved voice style per voice id — `get_voice_style` is cheap
 # but `get_voice_style_from_path` parses JSON; either way caching means
@@ -144,18 +151,28 @@ def _resolve_providers(device: str) -> list:
     return ['CPUExecutionProvider']
 
 
-def _load_model(device: str):
+def _load_model(device: str, model_name: str):
     """Load (or reload) the Supertonic TTS model. Heavy on first call
-    because it triggers a Hugging Face download (~400 MB); subsequent
-    loads are ~1 s from disk cache."""
+    because it triggers a Hugging Face download (200-400 MB depending on
+    the chosen model); subsequent loads are ~1 s from disk cache.
+
+    Reloads when EITHER `device` or `model_name` changes — both are read
+    from the addon's Configure dialog and the user can switch between
+    runs (one drives the ONNX execution provider, the other the model
+    weights). A single TTS instance is held; flipping models swaps the
+    whole instance so RAM doesn't grow with the number of models the
+    user has tried."""
     with _model_lock:
         if (_model_cache['instance'] is not None
-                and _model_cache['device'] == device):
+                and _model_cache['device'] == device
+                and _model_cache['model'] == model_name):
             return _model_cache['instance']
 
-        # Drop previous instance so we don't briefly hold two on GPU.
+        # Drop previous instance so we don't briefly hold two on GPU /
+        # double the model footprint in RAM during the swap.
         _model_cache['instance'] = None
         _model_cache['device'] = None
+        _model_cache['model'] = None
 
         try:
             from supertonic import TTS  # type: ignore
@@ -163,7 +180,8 @@ def _load_model(device: str):
             raise RuntimeError(f'supertonic python package not available: {exc}') from exc
 
         providers = _resolve_providers(device)
-        log.info('loading Supertonic TTS (providers=%s)', providers)
+        log.info('loading Supertonic TTS (model=%s, providers=%s)',
+                 model_name, providers)
 
         # The supertonic SDK doesn't take an explicit providers kwarg yet
         # (1.2.x). We set the env var the upstream code reads at session
@@ -171,13 +189,22 @@ def _load_model(device: str):
         # and supertonic forwards through to InferenceSession.
         os.environ.setdefault('ORT_PROVIDERS', ','.join(providers))
 
-        # auto_download=True downloads ~400 MB on first run. The progress
-        # frame fires before this so the user sees *something* instead
-        # of a 30-60 s freeze on a fresh install.
-        tts = TTS(auto_download=True)
+        # auto_download=True downloads the chosen model on first run.
+        # Sizes (per Supertone model cards):
+        #   supertonic     ~200 MB (English-only, lightest)
+        #   supertonic-2   ~250 MB (5 languages: en/ko/es/pt/fr)
+        #   supertonic-3   ~400 MB (31 languages + `na` fallback, default)
+        # Pinning by model name (not repo) lets supertonic-py's config
+        # module pick the right HF revision SHA — see config.MODEL_CONFIGS.
+        if model_name and model_name not in _AVAILABLE_MODELS:
+            log.warning('unknown SUPERTONIC_MODEL=%r; falling back to default %r',
+                        model_name, _DEFAULT_MODEL)
+            model_name = _DEFAULT_MODEL
+        tts = TTS(model=model_name or _DEFAULT_MODEL, auto_download=True)
         _voice_style_cache.clear()  # styles are bound to a TTS instance
         _model_cache['instance'] = tts
         _model_cache['device'] = device
+        _model_cache['model'] = model_name
         return tts
 
 
@@ -350,9 +377,9 @@ def handle_tts_synthesize(rid: str, params: dict, defaults: dict) -> None:
         return
 
     emit_progress(rid, 0.05,
-                  'Loading Supertonic (first call may download ~400 MB from Hugging Face)...')
+                  'Loading Supertonic (first call may download 200-400 MB from Hugging Face)...')
     try:
-        tts = _load_model(defaults['device'])
+        tts = _load_model(defaults['device'], defaults['model'])
     except Exception as exc:
         log.exception('model load failed')
         emit_error(rid, 'internal', f'failed to load Supertonic: {exc}')
@@ -437,8 +464,12 @@ def main() -> int:
             log.exception('manifest parse failed')
 
     # Host injects config via env vars (set from
-    # CONFIG['addons']['options']['supertonic']).
+    # CONFIG['addons']['options']['supertonic']). The names follow the
+    # convention enforced by the host's addon_provider._build_addon_env:
+    # `<ADDON_ID_UPPER_WITH_UNDERSCORES>_<KEY_UPPER>`. For `supertonic`
+    # the prefix is simply `SUPERTONIC_`.
     defaults = {
+        'model': os.environ.get('SUPERTONIC_MODEL') or config_defaults.get('model', _DEFAULT_MODEL),
         'device': os.environ.get('SUPERTONIC_DEVICE') or config_defaults.get('device', 'cpu'),
         'total_steps': int(os.environ.get('SUPERTONIC_TOTAL_STEPS')
                            or config_defaults.get('total_steps', 8) or 8),
