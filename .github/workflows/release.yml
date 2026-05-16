@@ -1,0 +1,210 @@
+name: Release
+
+# Cuts the platform zips for the Supertonic add-on, attaches them to a
+# GitHub Release, and pings the catalog repo. Much lighter than the
+# qwen3-tts release (no torch / transformers / accelerate) so the
+# default 60 min timeout is plenty.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)release (e.g. v1.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform_suffix: linux-x86_64
+          - os: macos-latest
+            platform_suffix: macos-universal
+          - os: windows-latest
+            platform_suffix: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          MANIFEST_VERSION=$(python -c "import json; print(json.load(open('manifest.json'))['version'])")
+          if [ "$VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error::tag $TAG implies version $VERSION but manifest.json declares $MANIFEST_VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install build deps
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          # supertonic pulls onnxruntime, numpy, soundfile, huggingface_hub.
+          # That's the entire dep tree — no torch, no transformers.
+          pip install supertonic
+
+      - name: Build add-on bundle
+        run: pyinstaller supertonic-addon.spec --distpath dist/
+
+      - name: Smoke test frozen binary (hello frame)
+        shell: bash
+        run: |
+          set -e
+          BIN_DIR="dist/supertonic-addon"
+          BIN_NAME="supertonic-addon"
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN_NAME="${BIN_NAME}.exe"; fi
+          BIN="$BIN_DIR/$BIN_NAME"
+          # Same Python-driven smoke test as qwen3 — macOS runners don't
+          # ship GNU `timeout` so we use threading.Timer for the watchdog.
+          # We're verifying the binary survives import (no missing
+          # onnxruntime EP, no missing supertonic data file) and emits a
+          # valid hello frame within 30 s. Model download is NOT
+          # triggered — only the manifest-derived voice list.
+          python - "$BIN" <<'PY'
+          import json, subprocess, sys, threading
+          proc = subprocess.Popen([sys.argv[1]], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True)
+          def watchdog():
+              try: proc.kill()
+              except Exception: pass
+          timer = threading.Timer(30.0, watchdog); timer.start()
+          try:
+              proc.stdin.close()
+              line = proc.stdout.readline()
+          finally:
+              timer.cancel()
+              try: proc.terminate()
+              except Exception: pass
+              try: proc.wait(timeout=10)
+              except Exception:
+                  try: proc.kill()
+                  except Exception: pass
+          print('frame:', (line or '').strip())
+          if not line:
+              sys.exit('no hello frame received within 30 s')
+          frame = json.loads(line)
+          assert frame.get('type') == 'hello', frame
+          assert frame.get('addon') == 'supertonic', frame
+          caps = frame.get('capabilities') or []
+          assert any(c.get('task') == 'tts.synthesize' for c in caps), caps
+          tts = next(c for c in caps if c.get('task') == 'tts.synthesize')
+          voices = tts.get('voices') or []
+          ids = {v.get('id') for v in voices}
+          # Manifest declares 10 preset voices (M1-M5, F1-F5).
+          # supertonic-custom only appears when voice_style_json is set
+          # — not the case in CI, so we don't assert it.
+          assert 'supertonic-m1' in ids, ids
+          assert 'supertonic-f1' in ids, ids
+          assert len([v for v in ids if v.startswith('supertonic-')]) >= 10, ids
+          PY
+
+      - name: Pack zip
+        id: pack
+        shell: bash
+        run: |
+          set -e
+          VERSION="${{ steps.ver.outputs.version }}"
+          PLAT="${{ matrix.platform_suffix }}"
+          ZIP_NAME="supertonic-${VERSION}-${PLAT}.zip"
+          STAGE="$RUNNER_TEMP/stage"
+          mkdir -p "$STAGE/bin"
+          cp -r dist/supertonic-addon/* "$STAGE/bin/"
+          cp manifest.json LICENSE README.md "$STAGE/"
+          # Python's shutil.make_archive — `zip` isn't on Windows Git Bash
+          # PATH and we want a portable archive across all runners.
+          python - "$STAGE" "$GITHUB_WORKSPACE/${ZIP_NAME%.zip}" <<'PY'
+          import shutil, sys
+          shutil.make_archive(sys.argv[2], 'zip', sys.argv[1])
+          PY
+          echo "zip_path=$GITHUB_WORKSPACE/$ZIP_NAME" >> "$GITHUB_OUTPUT"
+          echo "zip_name=$ZIP_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Compute sha256 sidecar
+        shell: bash
+        run: |
+          ZIP="${{ steps.pack.outputs.zip_path }}"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$(basename "$ZIP")" > "${ZIP}.sha256"
+          else
+            shasum -a 256 "$(basename "$ZIP")" > "${ZIP}.sha256"
+          fi
+          cat "${ZIP}.sha256"
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zip-${{ matrix.platform_suffix }}
+          path: |
+            ${{ steps.pack.outputs.zip_path }}
+            ${{ steps.pack.outputs.zip_path }}.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Resolve tag
+        id: tagref
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -e
+          TAG="${{ steps.tagref.outputs.tag }}"
+          mapfile -t ASSETS < <(find artifacts -type f \( -name '*.zip' -o -name '*.sha256' \))
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "Automated release for supertonic $TAG." \
+              "${ASSETS[@]}"
+          fi
+
+      - name: Trigger Subtitld catalog rebuild
+        env:
+          GH_TOKEN: ${{ secrets.SUBTITLD_BOT_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning::SUBTITLD_BOT_TOKEN not set — catalog rebuild skipped (cron will pick this up within 6 h)"
+            exit 0
+          fi
+          gh api repos/Subtitld/addons-catalog/dispatches \
+            -f event_type=catalog-rebuild \
+            -F client_payload[addon]=supertonic \
+            -F client_payload[tag]="${{ steps.tagref.outputs.tag }}"

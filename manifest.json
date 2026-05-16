@@ -1,0 +1,80 @@
+{
+  "manifest_version": 1,
+  "id": "supertonic",
+  "version": "0.0.1",
+  "display_name": "Supertonic (on-device, ONNX, 99M)",
+  "summary": "Lightning-fast on-device multilingual TTS — 31 languages, 10 preset voices, ~400 MB ONNX model. No GPU required; runs comfortably on CPU. Much lighter than Coqui XTTS / Qwen3-TTS at the cost of no zero-shot voice cloning from audio.",
+  "author": "Subtitld add-on team",
+  "license": "MIT (wrapper) + MIT (supertonic-py) + OpenRAIL-M (Supertonic-3 weights)",
+  "executable": "bin/supertonic-addon",
+  "protocol": 1,
+  "startup_timeout_sec": 60,
+  "platforms": ["linux", "macos", "windows"],
+  "tasks": ["tts.synthesize"],
+  "voice_clone": false,
+  "languages": [
+    "ar", "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr",
+    "de", "el", "hi", "hu", "id", "it", "ja", "ko", "lv", "lt",
+    "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "tr", "uk",
+    "vi", "na"
+  ],
+  "voices": [
+    {"id": "supertonic-m1", "language": "*", "display_name": "M1 — male preset 1"},
+    {"id": "supertonic-m2", "language": "*", "display_name": "M2 — male preset 2"},
+    {"id": "supertonic-m3", "language": "*", "display_name": "M3 — male preset 3"},
+    {"id": "supertonic-m4", "language": "*", "display_name": "M4 — male preset 4"},
+    {"id": "supertonic-m5", "language": "*", "display_name": "M5 — male preset 5"},
+    {"id": "supertonic-f1", "language": "*", "display_name": "F1 — female preset 1"},
+    {"id": "supertonic-f2", "language": "*", "display_name": "F2 — female preset 2"},
+    {"id": "supertonic-f3", "language": "*", "display_name": "F3 — female preset 3"},
+    {"id": "supertonic-f4", "language": "*", "display_name": "F4 — female preset 4"},
+    {"id": "supertonic-f5", "language": "*", "display_name": "F5 — female preset 5"}
+  ],
+  "models": [
+    {"id": "supertonic-3", "repo": "Supertone/supertonic-3", "size_mb": 400, "bundled": false,
+     "note": "Downloaded from Hugging Face on first synthesis call. Cached under ~/.cache/supertonic3/ by default; override via SUPERTONIC_CACHE_DIR."}
+  ],
+  "disk_required_mb": 1024,
+  "ram_required_mb": 2048,
+  "gpu": "optional",
+  "config_schema": {
+    "fields": [
+      {
+        "key": "device",
+        "type": "select",
+        "label": "Inference device",
+        "default": "cpu",
+        "options": [
+          {"value": "cpu",  "label": "CPU (works everywhere; fast — 99M params)"},
+          {"value": "cuda", "label": "CUDA (NVIDIA GPU via onnxruntime-gpu — install separately)"},
+          {"value": "coreml", "label": "CoreML (Apple Silicon — onnxruntime CoreMLExecutionProvider)"}
+        ]
+      },
+      {
+        "key": "total_steps",
+        "type": "int",
+        "label": "Quality (sampling steps)",
+        "default": 8,
+        "min": 5,
+        "max": 12,
+        "help": "Higher = cleaner audio, slower. 5 is fastest preview, 8 is the upstream default, 12 is the quality ceiling. Past 12 the model saturates — additional steps cost compute without measurable improvement."
+      },
+      {
+        "key": "default_language_mode",
+        "type": "select",
+        "label": "Language hint",
+        "default": "auto",
+        "options": [
+          {"value": "auto", "label": "Auto — pass the project's language tag (recommended)"},
+          {"value": "na",   "label": "Language-agnostic (lang=\"na\") — use when source language is uncertain"}
+        ]
+      },
+      {
+        "key": "voice_style_json",
+        "type": "file",
+        "label": "Custom voice JSON (optional)",
+        "help": "Path to a Voice Builder export (https://supertonic.supertone.ai/voice_builder). When set, the addon exposes one additional voice id 'supertonic-custom' that loads this JSON instead of a preset. The 10 preset voices remain available."
+      }
+    ]
+  }
+}
