@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "id": "supertonic",
-  "version": "0.0.2",
+  "version": "26.11.1",
   "display_name": "Supertonic (on-device, ONNX, 99M)",
   "summary": "Lightning-fast on-device multilingual TTS — 31 languages, 10 preset voices, ~400 MB ONNX model. No GPU required; runs comfortably on CPU. Much lighter than Coqui XTTS / Qwen3-TTS at the cost of no zero-shot voice cloning from audio.",
   "author": "Subtitld add-on team",

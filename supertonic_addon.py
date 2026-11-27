@@ -53,7 +53,7 @@ logging.basicConfig(stream=sys.stderr, level=logging.INFO,
 
 PROTOCOL = 1
 ADDON_ID = 'supertonic'
-VERSION = '0.0.2'
+VERSION = '26.11.1'
 
 # Models the upstream supertonic-py SDK ships. Keep in sync with
 # `supertonic.config.AVAILABLE_MODELS` (1.2.x: `supertonic`,
