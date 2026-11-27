@@ -9,7 +9,8 @@
   "executable": "bin/supertonic-addon",
   "protocol": 1,
   "startup_timeout_sec": 60,
-  "platforms": ["linux", "macos", "windows"],
+  "platforms": ["linux", "macos", "windows", "haiku"],
+  "haiku_packages": ["python3.14", "numpy_python3.14", "onnxruntime_python3.14", "soundfile_python3.14", "pyyaml_python3.14"],
   "tasks": ["tts.synthesize"],
   "voice_clone": false,
   "languages": [

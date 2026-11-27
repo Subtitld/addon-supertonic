@@ -159,8 +159,77 @@ jobs:
             ${{ steps.pack.outputs.zip_path }}
             ${{ steps.pack.outputs.zip_path }}.sha256
 
+  build-haiku:
+    # Not frozen: on Haiku the add-on runs on HaikuPorts' Python, with numpy,
+    # ONNX Runtime, soundfile and PyYAML from the Haiku packages manifest.json
+    # lists (onnxruntime and soundfile are on hpkg.subtitld.org). The add-on
+    # and the wheels in haiku/requirements.txt are pure Python, so the zip
+    # builds here; see tools/build_haiku.py.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the Haiku zip
+        id: pack
+        shell: bash
+        run: |
+          set -e
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          MANIFEST_VERSION=$(python -c "import json; print(json.load(open('manifest.json'))['version'])")
+          if [ "$VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error::tag $TAG implies version $VERSION but manifest.json declares $MANIFEST_VERSION"
+            exit 1
+          fi
+          ZIP=$(python tools/build_haiku.py)
+          echo "zip_path=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Check the archive
+        shell: bash
+        run: |
+          python - "${{ steps.pack.outputs.zip_path }}" <<'PY'
+          import json, sys, zipfile
+          zf = zipfile.ZipFile(sys.argv[1])
+          names = set(zf.namelist())
+          manifest = json.loads(zf.read('manifest.json'))
+          problems = []
+          if not zf.getinfo(manifest['executable']).external_attr >> 16 & 0o111:
+              problems.append('launcher is not executable')
+          for required in ('LICENSE', 'README.md', manifest['executable'], 'bin/boot.py',
+                           'bin/app/supertonic_addon.py', 'bin/app/manifest.json', 'bin/lib/supertonic/__init__.py',
+                           'bin/lib/huggingface_hub/__init__.py'):
+              if required not in names:
+                  problems.append(f'missing {required}')
+          if problems:
+              sys.exit('FATAL: ' + '; '.join(problems))
+          print(f'{sys.argv[1]}: {len(names)} entries, all required files present')
+          PY
+
+      - name: Compute sha256 sidecar
+        shell: bash
+        run: |
+          ZIP="${{ steps.pack.outputs.zip_path }}"
+          cd "$(dirname "$ZIP")"
+          sha256sum "$(basename "$ZIP")" > "${ZIP}.sha256"
+          cat "${ZIP}.sha256"
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zip-haiku-x86_64
+          path: |
+            ${{ steps.pack.outputs.zip_path }}
+            ${{ steps.pack.outputs.zip_path }}.sha256
+
   release:
-    needs: build
+    needs: [build, build-haiku]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
