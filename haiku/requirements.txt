@@ -1,0 +1,18 @@
+# Pure-Python packages the Haiku zip carries in bin/lib (tools/build_haiku.py).
+# numpy, ONNX Runtime, soundfile and PyYAML have native code and come from the
+# Haiku packages manifest.json lists instead. hf-xet has no Haiku build;
+# huggingface_hub downloads over plain HTTPS without it.
+supertonic==1.3.1
+huggingface_hub==2.5.0
+anyio==4.16.0
+click==8.5.1
+filelock==4.3.1
+fsspec==2026.9.0
+h11==0.16.0
+httpcore2==2.16.2
+httpx2==2.16.2
+idna==3.20
+packaging==26.4
+tqdm==4.70.1
+truststore==0.10.5
+typing_extensions==4.16.0
